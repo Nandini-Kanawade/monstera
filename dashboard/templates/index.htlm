@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monstera — Live Map</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; display: flex; flex-direction: column; height: 100vh; }
+
+    header { padding: 12px 20px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #222; }
+    h1 { font-size: 16px; font-weight: 500; color: #fff; }
+    #status { font-size: 12px; padding: 3px 10px; border-radius: 99px; background: #2a2a2a; color: #888; }
+    #status.connected { background: #0f3d1f; color: #4ade80; }
+    #status.error { background: #3d0f0f; color: #f87171; }
+
+    .stats { display: flex; gap: 24px; margin-left: auto; font-size: 12px; color: #666; }
+    .stats span { color: #aaa; }
+
+    main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    canvas { border: 1px solid #222; border-radius: 8px; background: #111; }
+
+    footer { padding: 8px 20px; font-size: 11px; color: #444; border-top: 1px solid #1a1a1a; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Monstera</h1>
+    <div id="status">Connecting...</div>
+    <div class="stats">
+      <div>Obstacles: <span id="obs-count">0</span></div>
+      <div>Path points: <span id="path-count">0</span></div>
+      <div>Heading: <span id="heading">—</span></div>
+    </div>
+  </header>
+
+  <main>
+    <canvas id="map" width="800" height="600"></canvas>
+  </main>
+
+  <footer>Robot at ws://{{ pi_ip }}:{{ pi_port }} — green dot = robot, white dots = obstacles, teal line = path</footer>
+
+  <script>
+    const canvas = document.getElementById("map");
+    const ctx = canvas.getContext("2d");
+    const status = document.getElementById("status");
+
+    const SCALE = 2;        // pixels per cm
+    const ORIGIN_X = canvas.width / 2;
+    const ORIGIN_Y = canvas.height / 2;
+
+    function toCanvas(x, y) {
+      return [ORIGIN_X + x * SCALE, ORIGIN_Y - y * SCALE];
+    }
+
+    function drawMap(state) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Grid
+      ctx.strokeStyle = "#1a1a1a";
+      ctx.lineWidth = 0.5;
+      for (let x = 0; x < canvas.width; x += 40) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += 40) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+
+      // Origin crosshair
+      ctx.strokeStyle = "#333";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(ORIGIN_X, 0); ctx.lineTo(ORIGIN_X, canvas.height); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, ORIGIN_Y); ctx.lineTo(canvas.width, ORIGIN_Y); ctx.stroke();
+
+      // Path
+      if (state.path.length > 1) {
+        ctx.strokeStyle = "#0d9488";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        const [sx, sy] = toCanvas(state.path[0][0], state.path[0][1]);
+        ctx.moveTo(sx, sy);
+        for (let i = 1; i < state.path.length; i++) {
+          const [px, py] = toCanvas(state.path[i][0], state.path[i][1]);
+          ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+
+      // Obstacles
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      for (const [ox, oy] of state.obstacles) {
+        const [cx, cy] = toCanvas(ox, oy);
+        if (cx < 0 || cx > canvas.width || cy < 0 || cy > canvas.height) continue;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Robot
+      const [rx, ry] = toCanvas(state.robot.x, state.robot.y);
+      const headingRad = (90 - state.robot.heading) * Math.PI / 180;
+
+      ctx.fillStyle = "#22c55e";
+      ctx.beginPath();
+      ctx.arc(rx, ry, 7, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Heading arrow
+      ctx.strokeStyle = "#86efac";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(rx, ry);
+      ctx.lineTo(rx + Math.cos(headingRad) * 18, ry - Math.sin(headingRad) * 18);
+      ctx.stroke();
+
+      // Stats
+      document.getElementById("obs-count").textContent = state.obstacles.length;
+      document.getElementById("path-count").textContent = state.path.length;
+      document.getElementById("heading").textContent = state.robot.heading + "°";
+    }
+
+    function connect() {
+      const ws = new WebSocket("ws://{{ pi_ip }}:{{ pi_port }}");
+
+      ws.onopen = () => {
+        status.textContent = "Connected";
+        status.className = "connected";
+      };
+
+      ws.onmessage = (event) => {
+        const state = JSON.parse(event.data);
+        drawMap(state);
+      };
+
+      ws.onclose = () => {
+        status.textContent = "Disconnected — retrying...";
+        status.className = "error";
+        setTimeout(connect, 3000);  // auto-reconnect
+      };
+
+      ws.onerror = () => {
+        status.textContent = "Connection error";
+        status.className = "error";
+      };
+    }
+
+    // Draw empty grid on load
+    drawMap({ robot: { x: 0, y: 0, heading: 90 }, obstacles: [], path: [] });
+    connect();
+  </script>
+</body>
+</html>
